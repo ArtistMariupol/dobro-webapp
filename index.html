@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Добро</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #fff);
+      --text: var(--tg-theme-text-color, #111);
+      --hint: var(--tg-theme-hint-color, #888);
+      --link: var(--tg-theme-link-color, #2aa1ee);
+      --btn: var(--tg-theme-button-color, #2aa1ee);
+      --btn-text: var(--tg-theme-button-text-color, #fff);
+      --sec: var(--tg-theme-secondary-bg-color, #f2f2f6);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; font: 15px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); padding-bottom: 72px; }
+    header { position: sticky; top: 0; background: var(--bg); padding: 12px 16px;
+      border-bottom: 1px solid var(--sec); display: flex; align-items: center; gap: 8px; z-index: 5; }
+    header .logo { font-weight: 700; font-size: 18px; }
+    header .who { margin-left: auto; color: var(--hint); font-size: 13px; text-align: right; }
+    main { padding: 12px 16px; }
+    .card { background: var(--sec); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+    .card h3 { margin: 0 0 4px; font-size: 16px; }
+    .muted { color: var(--hint); font-size: 13px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row.between { justify-content: space-between; }
+    .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(127,127,127,.18); }
+    label { display: block; font-size: 13px; color: var(--hint); margin: 10px 0 4px; }
+    input, select, textarea { width: 100%; padding: 11px 12px; border: 1px solid var(--sec);
+      border-radius: 10px; background: var(--bg); color: var(--text); font-size: 15px; }
+    textarea { min-height: 70px; resize: vertical; }
+    button { border: 0; border-radius: 10px; padding: 12px 14px; font-size: 15px; font-weight: 600;
+      background: var(--btn); color: var(--btn-text); cursor: pointer; }
+    button.ghost { background: transparent; color: var(--link); padding: 8px; font-weight: 500; }
+    button.sec { background: rgba(127,127,127,.18); color: var(--text); }
+    button.wide { width: 100%; margin-top: 10px; }
+    button:disabled { opacity: .5; }
+    nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--bg);
+      border-top: 1px solid var(--sec); }
+    nav button { flex: 1; background: transparent; color: var(--hint); border-radius: 0;
+      padding: 10px 0; font-size: 12px; font-weight: 500; }
+    nav button.active { color: var(--link); }
+    .empty { text-align: center; color: var(--hint); padding: 40px 0; }
+    .fab { position: fixed; right: 16px; bottom: 84px; width: 56px; height: 56px; border-radius: 50%;
+      font-size: 28px; box-shadow: 0 4px 14px rgba(0,0,0,.25); padding: 0; }
+    #toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%);
+      background: #333; color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px;
+      opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90%; z-index: 20; }
+    #toast.show { opacity: .95; }
+    .bid { border-top: 1px solid rgba(127,127,127,.2); padding: 10px 0; }
+    .spinner { text-align: center; padding: 40px; color: var(--hint); }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="logo">Добро</span>
+    <span class="who" id="who"></span>
+  </header>
+  <main id="main"><div class="spinner">Завантаження…</div></main>
+  <nav id="nav" style="display:none">
+    <button data-tab="feed">🔎 Стрічка</button>
+    <button data-tab="mine">📋 Мої</button>
+    <button data-tab="profile">👤 Профіль</button>
+  </nav>
+  <button class="fab" id="fab" style="display:none" onclick="openCreate()">＋</button>
+  <div id="toast"></div>
+
+  <script>
+    const CFG = { url: "https://dpppmlcyeyaxslqqubhf.supabase.co", anon: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwcHBtbGN5ZXlheHNscXF1YmhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1NzQzMDgsImV4cCI6MjEwMDE1MDMwOH0._Bey0vYEGkfb6cwFNGlr7jf2zGnuAtKkw-PL2bx61r8" };
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    const S = { token: null, userId: null, me: null, cities: [], cats: [], tab: "feed" };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const catName = (id) => (S.cats.find((c) => c.id === id) || {}).name_uk || "—";
+    const STATUS_UK = { open: "Відкрито", assigned: "Призначено", in_progress: "В роботі",
+      completed: "Завершено", cancelled: "Скасовано", disputed: "Спір", expired: "Прострочено" };
+
+    let toastT;
+    function toast(msg) {
+      const t = $("toast"); t.textContent = msg; t.classList.add("show");
+      clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600);
+    }
+
+    // ── HTTP ──────────────────────────────────────────────
+    function headers(extra) {
+      return Object.assign({
+        "apikey": CFG.anon,
+        "Authorization": "Bearer " + S.token,
+        "Content-Type": "application/json",
+      }, extra || {});
+    }
+    async function rest(path, opts) {
+      const r = await fetch(CFG.url + "/rest/v1" + path, Object.assign({ headers: headers(opts && opts.headers) }, opts));
+      const text = await r.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!r.ok) throw new Error((data && (data.message || data.hint)) || ("HTTP " + r.status));
+      return data;
+    }
+    async function rpc(name, body) {
+      return rest("/rpc/" + name, { method: "POST", body: JSON.stringify(body || {}) });
+    }
+
+    // ── Auth ─────────────────────────────────────────────
+    async function authenticate() {
+      const initData = tg ? tg.initData : "";
+      if (!initData) throw new Error("no_init_data");
+      const r = await fetch(CFG.url + "/functions/v1/tma-auth", {
+        method: "POST", headers: { "Content-Type": "application/json", "apikey": CFG.anon },
+        body: JSON.stringify({ initData }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || data.error || "auth_failed");
+      S.token = data.access_token; S.userId = data.user.id;
+    }
+
+    async function loadRefs() {
+      S.cities = await rest("/cities?select=id,slug,name_uk,is_active&order=is_active.desc,name_uk.asc");
+      S.cats = await rest("/service_categories?select=id,slug,name_uk&order=id.asc");
+    }
+    async function loadMe() {
+      const rows = await rest("/users?id=eq." + S.userId + "&select=id,full_name,role,city_id,balance_uah,rating_avg,rating_count");
+      S.me = rows[0];
+    }
+
+    // ── Screens ──────────────────────────────────────────
+    function setTab(t) { S.tab = t; render(); }
+
+    async function render() {
+      $("who").textContent = S.me ? (S.me.full_name + " · " + roleUk(S.me.role)) : "";
+      const needSetup = !S.me || !S.me.city_id;
+      $("nav").style.display = needSetup ? "none" : "flex";
+      $("fab").style.display = needSetup ? "none" : "block";
+      [...$("nav").children].forEach((b) => b.classList.toggle("active", b.dataset.tab === S.tab));
+
+      if (needSetup) return screenSetup();
+      if (S.tab === "feed") return screenFeed();
+      if (S.tab === "mine") return screenMine();
+      if (S.tab === "profile") return screenProfile();
+    }
+
+    function roleUk(r) { return { client: "клієнт", executor: "виконавець", both: "клієнт+виконавець" }[r] || r; }
+
+    function screenSetup() {
+      const cityOpts = S.cities.map((c) =>
+        '<option value="' + c.id + '"' + (c.is_active ? "" : " disabled") + '>' +
+        esc(c.name_uk) + (c.is_active ? "" : " (скоро)") + "</option>").join("");
+      $("main").innerHTML =
+        '<div class="card"><h3>Ласкаво просимо 🧡</h3>' +
+        '<p class="muted">Заповніть профіль, щоб почати.</p>' +
+        '<label>Ім\'я</label><input id="f_name" value="' + esc(S.me ? S.me.full_name : "") + '" />' +
+        '<label>Місто</label><select id="f_city">' + cityOpts + "</select>" +
+        '<label>Роль</label><select id="f_role">' +
+        '<option value="client">Замовляю послуги</option>' +
+        '<option value="both">І замовляю, і виконую</option>' +
+        '<option value="executor">Тільки виконую</option></select>' +
+        '<button class="wide" onclick="saveSetup()">Зберегти</button></div>';
+    }
+    async function saveSetup() {
+      const name = $("f_name").value.trim();
+      const city = parseInt($("f_city").value, 10);
+      const role = $("f_role").value;
+      if (!name) return toast("Вкажіть ім'я");
+      try {
+        await rest("/users?id=eq." + S.userId, {
+          method: "PATCH", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ full_name: name, city_id: city }),
+        });
+        await rpc("set_my_role", { p_role: role });
+        await loadMe(); toast("Профіль збережено"); S.tab = "feed"; render();
+      } catch (e) { toast("Помилка: " + e.message); }
+    }
+
+    function orderCard(o, onclick) {
+      return '<div class="card" onclick="' + onclick + '">' +
+        '<div class="row between"><h3>' + esc(o.title) + "</h3>" +
+        '<span class="pill">' + esc(STATUS_UK[o.status] || o.status) + "</span></div>" +
+        '<div class="muted">' + esc(catName(o.category_id)) +
+        (o.budget_uah ? " · бюджет " + o.budget_uah + " грн" : "") + "</div>" +
+        (o.description ? '<div style="margin-top:6px">' + esc(o.description) + "</div>" : "") +
+        "</div>";
+    }
+
+    async function screenFeed() {
+      $("main").innerHTML = '<div class="spinner">Завантаження…</div>';
+      try {
+        const rows = await rest("/orders?status=eq.open&city_id=eq." + S.me.city_id +
+          "&select=id,title,description,budget_uah,category_id,status,client_id,created_at&order=created_at.desc&limit=50");
+        if (!rows.length) return void ($("main").innerHTML = '<div class="empty">Поки що немає відкритих замовлень у вашому місті.<br>Створіть перше через ＋</div>');
+        $("main").innerHTML = rows.map((o) => orderCard(o, "openOrder(" + o.id + ")")).join("");
+      } catch (e) { $("main").innerHTML = '<div class="empty">Помилка: ' + esc(e.message) + "</div>"; }
+    }
+
+    async function screenMine() {
+      $("main").innerHTML = '<div class="spinner">Завантаження…</div>';
+      try {
+        const rows = await rest("/orders?client_id=eq." + S.userId +
+          "&select=id,title,description,budget_uah,category_id,status,client_id,created_at&order=created_at.desc");
+        if (!rows.length) return void ($("main").innerHTML = '<div class="empty">У вас ще немає замовлень.<br>Створіть через ＋</div>');
+        $("main").innerHTML = rows.map((o) => orderCard(o, "openOrder(" + o.id + ")")).join("");
+      } catch (e) { $("main").innerHTML = '<div class="empty">Помилка: ' + esc(e.message) + "</div>"; }
+    }
+
+    function screenProfile() {
+      const m = S.me;
+      $("main").innerHTML =
+        '<div class="card"><h3>' + esc(m.full_name) + "</h3>" +
+        '<div class="muted">Роль: ' + roleUk(m.role) + " · Рейтинг: " +
+        (m.rating_count ? m.rating_avg + " (" + m.rating_count + ")" : "—") + "</div>" +
+        '<div class="muted">Баланс гаманця: <b>' + m.balance_uah + " грн</b></div></div>" +
+        '<div class="card"><label>Змінити роль</label><div class="row">' +
+        ["client", "both", "executor"].map((r) =>
+          '<button class="' + (m.role === r ? "" : "sec") + '" style="flex:1" onclick="changeRole(\'' + r + '\')">' +
+          roleUk(r) + "</button>").join("") + "</div>" +
+        '<label>Місто</label><select id="p_city" onchange="changeCity()">' +
+        S.cities.map((c) => '<option value="' + c.id + '"' + (c.id === m.city_id ? " selected" : "") +
+          (c.is_active ? "" : " disabled") + ">" + esc(c.name_uk) + "</option>").join("") + "</select></div>" +
+        '<div class="card muted">Щоб робити ставки як виконавець, потрібен баланс ≥ 0. Поповнення гаманця — у наступній версії.</div>';
+    }
+    async function changeRole(r) {
+      try { await rpc("set_my_role", { p_role: r }); await loadMe(); toast("Роль оновлено"); render(); }
+      catch (e) { toast("Помилка: " + e.message); }
+    }
+    async function changeCity() {
+      const city = parseInt($("p_city").value, 10);
+      try {
+        await rest("/users?id=eq." + S.userId, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ city_id: city }) });
+        await loadMe(); toast("Місто оновлено");
+      } catch (e) { toast("Помилка: " + e.message); }
+    }
+
+    // ── Create order ─────────────────────────────────────
+    function openCreate() {
+      const catOpts = S.cats.map((c) => '<option value="' + c.id + '">' + esc(c.name_uk) + "</option>").join("");
+      $("main").innerHTML =
+        '<div class="card"><h3>Нове замовлення</h3>' +
+        '<label>Що потрібно зробити?</label><input id="c_title" placeholder="напр. Прибрати 2-кімнатну" />' +
+        '<label>Категорія</label><select id="c_cat">' + catOpts + "</select>" +
+        '<label>Опис (необов\'язково)</label><textarea id="c_desc" placeholder="Деталі, час, адреса…"></textarea>' +
+        '<label>Бюджет, грн (необов\'язково)</label><input id="c_budget" type="number" inputmode="decimal" placeholder="600" />' +
+        '<button class="wide" onclick="submitCreate()">Опублікувати</button>' +
+        '<button class="ghost wide" onclick="setTab(\'feed\')">Скасувати</button></div>';
+      $("nav").style.display = "none"; $("fab").style.display = "none";
+    }
+    async function submitCreate() {
+      const title = $("c_title").value.trim();
+      if (!title) return toast("Вкажіть, що потрібно зробити");
+      const budget = parseFloat($("c_budget").value);
+      try {
+        await rpc("create_order", {
+          p_title: title,
+          p_category_id: parseInt($("c_cat").value, 10),
+          p_city_id: S.me.city_id,
+          p_description: $("c_desc").value.trim() || null,
+          p_budget: isNaN(budget) ? null : budget,
+        });
+        toast("Замовлення опубліковано"); setTab("mine");
+      } catch (e) { toast("Помилка: " + e.message); }
+    }
+
+    // ── Order detail ─────────────────────────────────────
+    async function openOrder(id) {
+      $("main").innerHTML = '<div class="spinner">Завантаження…</div>';
+      $("nav").style.display = "none"; $("fab").style.display = "none";
+      try {
+        const o = (await rest("/orders?id=eq." + id + "&select=id,title,description,budget_uah,final_price_uah,category_id,status,client_id,executor_id"))[0];
+        const bids = await rest("/bids?order_id=eq." + id + "&select=id,executor_id,price_uah,comment,eta_hours,status&order=price_uah.asc");
+        renderOrder(o, bids);
+      } catch (e) { $("main").innerHTML = '<div class="empty">Помилка: ' + esc(e.message) + "</div>"; }
+    }
+    function renderOrder(o, bids) {
+      const iAmClient = o.client_id === S.userId;
+      const iCanBid = !iAmClient && (S.me.role === "executor" || S.me.role === "both");
+      const myBid = bids.find((b) => b.executor_id === S.userId);
+      let html = '<button class="ghost" onclick="setTab(\'' + S.tab + '\')">← Назад</button>' +
+        '<div class="card"><div class="row between"><h3>' + esc(o.title) + "</h3>" +
+        '<span class="pill">' + esc(STATUS_UK[o.status] || o.status) + "</span></div>" +
+        '<div class="muted">' + esc(catName(o.category_id)) +
+        (o.budget_uah ? " · бюджет " + o.budget_uah + " грн" : "") +
+        (o.final_price_uah ? " · ціна " + o.final_price_uah + " грн" : "") + "</div>" +
+        (o.description ? '<div style="margin-top:8px">' + esc(o.description) + "</div>" : "");
+
+      // Client status controls
+      if (iAmClient) {
+        if (o.status === "open") html += '<button class="sec wide" onclick="setStatus(' + o.id + ",'cancelled')\">Скасувати замовлення</button>";
+        if (o.status === "assigned") html += '<button class="wide" onclick="setStatus(' + o.id + ",'in_progress')\">Почати роботу</button>";
+        if (o.status === "in_progress") html += '<button class="wide" onclick="setStatus(' + o.id + ",'completed')\">Завершити (списати комісію 12%)</button>";
+      }
+      html += "</div>";
+
+      // Bids
+      if (iAmClient) {
+        html += '<div class="card"><h3>Ставки (' + bids.length + ")</h3>";
+        if (!bids.length) html += '<p class="muted">Поки немає ставок.</p>';
+        bids.forEach((b) => {
+          html += '<div class="bid"><div class="row between"><b>' + b.price_uah + " грн</b>" +
+            '<span class="pill">' + esc({ pending: "очікує", accepted: "прийнято", rejected: "відхилено", withdrawn: "відкликано" }[b.status] || b.status) + "</span></div>" +
+            (b.eta_hours ? '<div class="muted">≈ ' + b.eta_hours + " год</div>" : "") +
+            (b.comment ? "<div>" + esc(b.comment) + "</div>" : "");
+          if (o.status === "open" && b.status === "pending")
+            html += '<button class="wide" onclick="acceptBid(' + b.id + "," + o.id + ')">Прийняти цю ставку</button>";
+          html += "</div>";
+        });
+        html += "</div>";
+      } else {
+        // Executor view
+        html += '<div class="card"><h3>Ваша ставка</h3>';
+        if (myBid) {
+          html += '<div class="row between"><b>' + myBid.price_uah + " грн</b><span class=\"pill\">" +
+            esc({ pending: "очікує", accepted: "прийнято", rejected: "відхилено" }[myBid.status] || myBid.status) + "</span></div>";
+        } else if (iCanBid && o.status === "open") {
+          html += '<label>Ваша ціна, грн</label><input id="b_price" type="number" inputmode="decimal" placeholder="500" />' +
+            '<label>Термін, год (необов\'язково)</label><input id="b_eta" type="number" inputmode="numeric" placeholder="3" />' +
+            '<label>Коментар (необов\'язково)</label><textarea id="b_comment"></textarea>' +
+            '<button class="wide" onclick="placeBid(' + o.id + ')">Зробити ставку</button>';
+        } else {
+          html += '<p class="muted">' + (o.status !== "open" ? "Замовлення вже не приймає ставки." : "Увімкніть роль «виконавець» у профілі, щоб робити ставки.") + "</p>";
+        }
+        html += "</div>";
+      }
+      $("main").innerHTML = html;
+    }
+    async function acceptBid(bidId, orderId) {
+      try { await rpc("accept_bid", { p_bid_id: bidId }); toast("Ставку прийнято"); openOrder(orderId); }
+      catch (e) { toast("Помилка: " + e.message); }
+    }
+    async function placeBid(orderId) {
+      const price = parseFloat($("b_price").value);
+      if (isNaN(price) || price <= 0) return toast("Вкажіть ціну");
+      const eta = parseInt($("b_eta").value, 10);
+      try {
+        await rest("/bids", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ order_id: orderId, executor_id: S.userId, price_uah: price,
+            eta_hours: isNaN(eta) ? null : eta, comment: $("b_comment").value.trim() || null }),
+        });
+        toast("Ставку зроблено"); openOrder(orderId);
+      } catch (e) {
+        toast(e.message.indexOf("row-level security") >= 0
+          ? "Не можна: перевірте роль/баланс, або замовлення закрите" : "Помилка: " + e.message);
+      }
+    }
+    async function setStatus(orderId, status) {
+      try {
+        await rest("/orders?id=eq." + orderId, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status }) });
+        toast("Статус: " + (STATUS_UK[status] || status)); openOrder(orderId);
+      } catch (e) { toast("Помилка: " + e.message); }
+    }
+
+    // ── Boot ─────────────────────────────────────────────
+    document.querySelectorAll("#nav button").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
+    (async function boot() {
+      if (tg) { tg.ready(); tg.expand(); }
+      try {
+        await authenticate();
+        await loadRefs();
+        await loadMe();
+        render();
+      } catch (e) {
+        $("main").innerHTML = '<div class="empty">' +
+          (e.message === "no_init_data"
+            ? "Відкрийте цей застосунок через бота у Telegram."
+            : "Не вдалося увійти: " + esc(e.message)) + "</div>";
+      }
+    })();
+  </script>
+</body>
+</html>
