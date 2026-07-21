@@ -303,7 +303,8 @@
             (b.eta_hours ? '<div class="muted">≈ ' + b.eta_hours + " год</div>" : "") +
             (b.comment ? "<div>" + esc(b.comment) + "</div>" : "");
           if (o.status === "open" && b.status === "pending")
-            html += '<button class="wide" onclick="acceptBid(' + b.id + "," + o.id + ')">Прийняти цю ставку</button>";
+            html += '<button class="wide" onclick="acceptBid(' + b.id + "," + o.id +
+              ')">Прийняти цю ставку</button>';
           html += "</div>";
         });
         html += "</div>";
