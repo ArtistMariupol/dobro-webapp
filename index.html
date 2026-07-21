@@ -96,7 +96,10 @@
       }, extra || {});
     }
     async function rest(path, opts) {
-      const r = await fetch(CFG.url + "/rest/v1" + path, Object.assign({ headers: headers(opts && opts.headers) }, opts));
+      opts = opts || {};
+      // ВАЖЛИВО: merged headers мають перекривати opts.headers, а не навпаки,
+      // інакше виклики з власними headers (Prefer) губили apikey/Authorization.
+      const r = await fetch(CFG.url + "/rest/v1" + path, Object.assign({}, opts, { headers: headers(opts.headers) }));
       const text = await r.text();
       const data = text ? JSON.parse(text) : null;
       if (!r.ok) throw new Error((data && (data.message || data.hint)) || ("HTTP " + r.status));
