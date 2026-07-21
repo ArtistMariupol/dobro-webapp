@@ -53,6 +53,12 @@
     #toast.show { opacity: .95; }
     .bid { border-top: 1px solid rgba(127,127,127,.2); padding: 10px 0; }
     .spinner { text-align: center; padding: 40px; color: var(--hint); }
+    .chatlog { max-height: 42vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
+    .msg { display: flex; }
+    .msg.mine { justify-content: flex-end; }
+    .bubble { max-width: 78%; padding: 8px 11px; border-radius: 14px; background: rgba(127,127,127,.18);
+      overflow-wrap: anywhere; }
+    .msg.mine .bubble { background: var(--btn); color: var(--btn-text); }
   </style>
 </head>
 <body>
@@ -165,6 +171,7 @@
     function setTab(t) { S.tab = t; render(); }
 
     async function render() {
+      stopChat();
       $("who").textContent = S.me ? (S.me.full_name + " · " + roleUk(S.me.role)) : "";
       const needSetup = !S.me || !S.me.city_id;
       $("nav").style.display = needSetup ? "none" : "flex";
@@ -300,6 +307,7 @@
 
     // ── Create order ─────────────────────────────────────
     function openCreate() {
+      stopChat();
       createLoc = null;
       const catOpts = S.cats.map((c) => '<option value="' + c.id + '">' + esc(c.name_uk) + "</option>").join("");
       $("main").innerHTML =
@@ -346,16 +354,27 @@
     }
 
     // ── Order detail ─────────────────────────────────────
+    const CHAT_STATUSES = ["assigned", "in_progress", "completed", "disputed"];
     async function openOrder(id) {
+      stopChat();
       $("main").innerHTML = '<div class="spinner">Завантаження…</div>';
       $("nav").style.display = "none"; $("fab").style.display = "none";
       try {
         const o = (await rest("/orders?id=eq." + id + "&select=id,title,description,budget_uah,final_price_uah,category_id,status,client_id,executor_id"))[0];
         const bids = await rest("/bids?order_id=eq." + id + "&select=id,executor_id,price_uah,comment,eta_hours,status&order=price_uah.asc");
-        renderOrder(o, bids);
+        const participant = o.client_id === S.userId || o.executor_id === S.userId;
+        const canChat = participant && CHAT_STATUSES.includes(o.status);
+        let msgs = [];
+        if (canChat) {
+          try {
+            msgs = await rest("/messages?order_id=eq." + id + "&select=id,sender_id,body,created_at&order=id.asc");
+          } catch (e) { msgs = []; }
+        }
+        renderOrder(o, bids, msgs, canChat);
+        if (canChat) startChat(id);
       } catch (e) { $("main").innerHTML = '<div class="empty">Помилка: ' + esc(e.message) + "</div>"; }
     }
-    function renderOrder(o, bids) {
+    function renderOrder(o, bids, msgs, canChat) {
       const iAmClient = o.client_id === S.userId;
       const iCanBid = !iAmClient && (S.me.role === "executor" || S.me.role === "both");
       const myBid = bids.find((b) => b.executor_id === S.userId);
@@ -406,7 +425,72 @@
         }
         html += "</div>";
       }
+
+      // Chat (лише учасники, лише після прийняття ставки)
+      if (canChat) {
+        html += '<div class="card"><h3>Чат</h3>' +
+          '<div id="chatlog" class="chatlog">' + chatItems(msgs) + "</div>" +
+          '<div class="row" style="gap:6px;margin-top:8px">' +
+          '<input id="chat_in" placeholder="Повідомлення…" style="flex:1" ' +
+          'onkeydown="if(event.key===\'Enter\')sendChatMessage(' + o.id + ')" />' +
+          '<button onclick="sendChatMessage(' + o.id + ')">➤</button></div></div>';
+      } else if (CHAT_STATUSES.indexOf(o.status) < 0) {
+        html += '<div class="card muted">💬 Чат стане доступним після прийняття ставки.</div>';
+      }
+
       $("main").innerHTML = html;
+      const log = $("chatlog");
+      if (log) log.scrollTop = log.scrollHeight;
+    }
+
+    // ── Chat ─────────────────────────────────────────────
+    let chatTimer = null, chatOrderId = null;
+    function renderMsg(m) {
+      const mine = m.sender_id === S.userId;
+      return '<div class="msg' + (mine ? " mine" : "") + '"><div class="bubble">' + esc(m.body) + "</div></div>";
+    }
+    function chatItems(msgs) {
+      return msgs && msgs.length
+        ? msgs.map(renderMsg).join("")
+        : '<div class="muted" style="text-align:center;padding:10px">Повідомлень ще немає. Напишіть перше!</div>';
+    }
+    function startChat(orderId) {
+      stopChat();
+      chatOrderId = orderId;
+      chatTimer = setInterval(() => refreshChat(orderId), 4000);
+    }
+    function stopChat() {
+      if (chatTimer) clearInterval(chatTimer);
+      chatTimer = null;
+      chatOrderId = null;
+    }
+    async function refreshChat(orderId) {
+      if (chatOrderId !== orderId) return;
+      const log = $("chatlog");
+      if (!log) { stopChat(); return; }
+      let msgs;
+      try {
+        msgs = await rest("/messages?order_id=eq." + orderId + "&select=id,sender_id,body,created_at&order=id.asc");
+      } catch (e) { return; }
+      if (chatOrderId !== orderId || !$("chatlog")) return;
+      log.innerHTML = chatItems(msgs);
+      log.scrollTop = log.scrollHeight;
+    }
+    async function sendChatMessage(orderId) {
+      const inp = $("chat_in");
+      const body = inp.value.trim();
+      if (!body) return;
+      inp.value = "";
+      try {
+        await rest("/messages", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ order_id: orderId, sender_id: S.userId, body }),
+        });
+        await refreshChat(orderId);
+      } catch (e) {
+        inp.value = body;
+        toast(e.message.indexOf("row-level security") >= 0 ? "Чат недоступний для цього замовлення" : "Помилка: " + e.message);
+      }
     }
     async function acceptBid(bidId, orderId) {
       try { await rpc("accept_bid", { p_bid_id: bidId }); toast("Ставку прийнято"); openOrder(orderId); }
