@@ -72,7 +72,8 @@
   <script>
     const CFG = { url: "https://dpppmlcyeyaxslqqubhf.supabase.co", anon: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRwcHBtbGN5ZXlheHNscXF1YmhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1NzQzMDgsImV4cCI6MjEwMDE1MDMwOH0._Bey0vYEGkfb6cwFNGlr7jf2zGnuAtKkw-PL2bx61r8" };
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-    const S = { token: null, userId: null, me: null, cities: [], cats: [], tab: "feed" };
+    const S = { token: null, userId: null, me: null, cities: [], cats: [], tab: "feed", feedMode: "nearby" };
+    let createLoc = null; // місце для нового замовлення (з геолокації)
 
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
@@ -80,6 +81,35 @@
     const catName = (id) => (S.cats.find((c) => c.id === id) || {}).name_uk || "—";
     const STATUS_UK = { open: "Відкрито", assigned: "Призначено", in_progress: "В роботі",
       completed: "Завершено", cancelled: "Скасовано", disputed: "Спір", expired: "Прострочено" };
+
+    const fmtDist = (m) => m == null ? "" : (m < 1000 ? Math.round(m) + " м" : (m / 1000).toFixed(1) + " км");
+
+    // Геолокація: Telegram LocationManager → navigator.geolocation → null.
+    async function getLocation() {
+      const lm = tg && tg.LocationManager;
+      if (lm && typeof lm.getLocation === "function") {
+        const viaTg = await new Promise((resolve) => {
+          try {
+            const go = () => {
+              if (lm.isLocationAvailable === false) return resolve(null);
+              lm.getLocation((loc) =>
+                resolve(loc && typeof loc.latitude === "number" ? { lat: loc.latitude, lng: loc.longitude } : null));
+            };
+            if (typeof lm.init === "function") lm.init(go);
+            else go();
+          } catch (e) { resolve(null); }
+        });
+        if (viaTg) return viaTg;
+      }
+      return await new Promise((resolve) => {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+          () => resolve(null),
+          { timeout: 8000, maximumAge: 60000 },
+        );
+      });
+    }
 
     let toastT;
     function toast(msg) {
@@ -180,23 +210,54 @@
     }
 
     function orderCard(o, onclick) {
+      const dist = o.distance_m != null ? " · 📍 " + esc(fmtDist(o.distance_m)) : "";
       return '<div class="card" onclick="' + onclick + '">' +
         '<div class="row between"><h3>' + esc(o.title) + "</h3>" +
         '<span class="pill">' + esc(STATUS_UK[o.status] || o.status) + "</span></div>" +
         '<div class="muted">' + esc(catName(o.category_id)) +
-        (o.budget_uah ? " · бюджет " + o.budget_uah + " грн" : "") + "</div>" +
+        (o.budget_uah ? " · бюджет " + o.budget_uah + " грн" : "") + dist + "</div>" +
         (o.description ? '<div style="margin-top:6px">' + esc(o.description) + "</div>" : "") +
         "</div>";
     }
 
+    function feedToggle() {
+      const m = S.feedMode;
+      return '<div class="row" style="gap:6px;margin-bottom:10px">' +
+        '<button class="' + (m === "nearby" ? "" : "sec") + '" style="flex:1" onclick="setFeedMode(\'nearby\')">📍 Поблизу</button>' +
+        '<button class="' + (m === "city" ? "" : "sec") + '" style="flex:1" onclick="setFeedMode(\'city\')">🏙 Усе місто</button></div>';
+    }
+    function setFeedMode(m) {
+      S.feedMode = m;
+      screenFeed();
+    }
+
     async function screenFeed() {
-      $("main").innerHTML = '<div class="spinner">Завантаження…</div>';
+      const tg0 = feedToggle();
+      $("main").innerHTML = tg0 + '<div class="spinner">Завантаження…</div>';
       try {
-        const rows = await rest("/orders?status=eq.open&city_id=eq." + S.me.city_id +
-          "&select=id,title,description,budget_uah,category_id,status,client_id,created_at&order=created_at.desc&limit=50");
-        if (!rows.length) return void ($("main").innerHTML = '<div class="empty">Поки що немає відкритих замовлень у вашому місті.<br>Створіть перше через ＋</div>');
-        $("main").innerHTML = rows.map((o) => orderCard(o, "openOrder(" + o.id + ")")).join("");
-      } catch (e) { $("main").innerHTML = '<div class="empty">Помилка: ' + esc(e.message) + "</div>"; }
+        let rows;
+        if (S.feedMode === "nearby") {
+          const loc = await getLocation();
+          if (!loc) {
+            toast("Локація недоступна — показую все місто");
+            S.feedMode = "city";
+            return screenFeed();
+          }
+          rows = await rpc("orders_feed_nearby", {
+            p_lat: loc.lat, p_lng: loc.lng, p_radius_m: 20000, p_city_id: S.me.city_id, p_category_id: null,
+          });
+        } else {
+          rows = await rest("/orders?status=eq.open&city_id=eq." + S.me.city_id +
+            "&select=id,title,description,budget_uah,category_id,status,client_id,created_at&order=created_at.desc&limit=50");
+        }
+        const body = !rows.length
+          ? '<div class="empty">Поки що немає відкритих замовлень' + (S.feedMode === "nearby" ? " поблизу" : " у місті") +
+            '.<br>Створіть перше через ＋</div>'
+          : rows.map((o) => orderCard(o, "openOrder(" + o.id + ")")).join("");
+        $("main").innerHTML = tg0 + body;
+      } catch (e) {
+        $("main").innerHTML = tg0 + '<div class="empty">Помилка: ' + esc(e.message) + "</div>";
+      }
     }
 
     async function screenMine() {
@@ -239,6 +300,7 @@
 
     // ── Create order ─────────────────────────────────────
     function openCreate() {
+      createLoc = null;
       const catOpts = S.cats.map((c) => '<option value="' + c.id + '">' + esc(c.name_uk) + "</option>").join("");
       $("main").innerHTML =
         '<div class="card"><h3>Нове замовлення</h3>' +
@@ -246,9 +308,23 @@
         '<label>Категорія</label><select id="c_cat">' + catOpts + "</select>" +
         '<label>Опис (необов\'язково)</label><textarea id="c_desc" placeholder="Деталі, час, адреса…"></textarea>' +
         '<label>Бюджет, грн (необов\'язково)</label><input id="c_budget" type="number" inputmode="decimal" placeholder="600" />' +
+        '<label>Місце</label>' +
+        '<button class="sec wide" type="button" id="c_loc_btn" onclick="captureLoc()">📍 Вказати моє місцезнаходження</button>' +
+        '<div class="muted" id="c_loc_status" style="margin-top:6px">За замовчуванням — центр міста</div>' +
         '<button class="wide" onclick="submitCreate()">Опублікувати</button>' +
         '<button class="ghost wide" onclick="setTab(\'feed\')">Скасувати</button></div>';
       $("nav").style.display = "none"; $("fab").style.display = "none";
+    }
+    async function captureLoc() {
+      $("c_loc_status").textContent = "Отримуємо локацію…";
+      const loc = await getLocation();
+      if (loc) {
+        createLoc = loc;
+        $("c_loc_status").textContent = "📍 Місце додано (" + loc.lat.toFixed(4) + ", " + loc.lng.toFixed(4) + ")";
+      } else {
+        createLoc = null;
+        $("c_loc_status").textContent = "Локація недоступна — буде центр міста";
+      }
     }
     async function submitCreate() {
       const title = $("c_title").value.trim();
@@ -261,7 +337,10 @@
           p_city_id: S.me.city_id,
           p_description: $("c_desc").value.trim() || null,
           p_budget: isNaN(budget) ? null : budget,
+          p_lat: createLoc ? createLoc.lat : null,
+          p_lng: createLoc ? createLoc.lng : null,
         });
+        createLoc = null;
         toast("Замовлення опубліковано"); setTab("mine");
       } catch (e) { toast("Помилка: " + e.message); }
     }
